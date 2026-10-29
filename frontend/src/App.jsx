@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ETHIOPIAN_MONTHS,
   ethiopianToGregorian,
@@ -19,39 +19,37 @@ import {
   getLoginRequest,
   getRegistrationGuidance,
 } from "./authLanding";
+import {
+  apiFetch,
+  API_LOGIN_TIMEOUT_MS,
+  AUTH_EXPIRED_EVENT,
+  readApiResponse,
+} from "./apiClient";
+import { attendanceUpdates } from "./attendanceDraft";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
-
-async function readApiResponse(response) {
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.message || `Request failed (${response.status}).`);
-  }
-  return payload;
-}
-
-function Login({ onLogin }) {
+function Login({ onLogin, sessionExpired }) {
   const [flow, setFlow] = useState("signin");
   const [accountType, setAccountType] = useState("admin");
   const [identity, setIdentity] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
 
   async function submit(event) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
       const request = getLoginRequest(accountType, identity, password);
-      const response = await fetch(
-        `${API_BASE_URL}${request.path}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request.body),
-        }
-      );
+      const response = await apiFetch(request.path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request.body),
+        timeoutMs: API_LOGIN_TIMEOUT_MS,
+      });
       const result = await readApiResponse(response);
       setPassword("");
       onLogin({
@@ -62,6 +60,7 @@ function Login({ onLogin }) {
     } catch (requestError) {
       setError(requestError.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -113,6 +112,11 @@ function Login({ onLogin }) {
               ? "Sign in with your administrator email and password."
               : "Use the username and password provided by your administrator. A temporary password must be changed at first sign-in."}
           </p>
+          {sessionExpired && (
+            <p className="notice warning" role="status">
+              Your sign-in session expired. Sign in again to continue.
+            </p>
+          )}
           <form onSubmit={submit} className="stack">
             <label>
               {accountType === "admin" ? "Email" : "Username"}
@@ -172,7 +176,7 @@ function ImportPage({ token, role, onSignOut }) {
   useEffect(() => {
     if (role !== "admin") return undefined;
     const controller = new AbortController();
-    fetch(`${API_BASE_URL}/api/attendance/classes`, {
+    apiFetch(`${API_BASE_URL}/api/attendance/classes`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
@@ -197,7 +201,7 @@ function ImportPage({ token, role, onSignOut }) {
     try {
       const form = new FormData();
       form.append("workbook", file);
-      const response = await fetch(`${API_BASE_URL}/api/students/import/preview`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/students/import/preview`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: form,
@@ -215,7 +219,7 @@ function ImportPage({ token, role, onSignOut }) {
     setError("");
     setResult(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/students/import/confirm`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/students/import/confirm`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -644,7 +648,7 @@ function StudentList({ token, classOptions }) {
     setError("");
     const timeout = setTimeout(async () => {
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${API_BASE_URL}/api/students?${params.toString()}`,
           {
             headers: { Authorization: `Bearer ${token}` },
@@ -837,6 +841,7 @@ function AttendancePage({ token, classOptions }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const savingRef = useRef(false);
 
   let attendanceDate = "";
   let dateError = "";
@@ -868,7 +873,7 @@ function AttendancePage({ token, classOptions }) {
     setStatuses({});
     setSavedStatuses({});
     setSession(null);
-    fetch(`${API_BASE_URL}/api/attendance/session?${params.toString()}`, {
+    apiFetch(`${API_BASE_URL}/api/attendance/session?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
@@ -916,7 +921,6 @@ function AttendancePage({ token, classOptions }) {
   const visibleStudents = students.filter((student) =>
     [
       student.studentName,
-      student.christianName,
       student.originalSerialNumber,
     ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch))
   );
@@ -938,6 +942,7 @@ function AttendancePage({ token, classOptions }) {
   }
 
   async function persistAttendance(action) {
+    if (savingRef.current || loading || !students.length) return;
     if (action === "complete") {
       if (notRecordedCount > 0) {
         setError("Mark every student Present, Absent, or Permission before completing.");
@@ -953,11 +958,23 @@ function AttendancePage({ token, classOptions }) {
       if (!confirmed) return;
     }
 
+    const updates = attendanceUpdates(
+      students,
+      statuses,
+      savedStatuses,
+      action === "complete"
+    );
+    if (!updates.length) {
+      setNotice("There are no unsaved attendance changes.");
+      return;
+    }
+
+    savingRef.current = true;
     setSaving(true);
     setError("");
     setNotice("");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_BASE_URL}/api/attendance/session/${action}`,
         {
           method: action === "complete" ? "POST" : "PUT",
@@ -968,10 +985,7 @@ function AttendancePage({ token, classOptions }) {
           body: JSON.stringify({
             classNumber: Number(classNumber),
             attendanceDate,
-            statuses: students.map(({ studentId }) => ({
-              studentId,
-              status: statuses[studentId] || "not_recorded",
-            })),
+            statuses: updates,
           }),
         }
       );
@@ -987,6 +1001,7 @@ function AttendancePage({ token, classOptions }) {
     } catch (requestError) {
       setError(requestError.message);
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -1021,7 +1036,7 @@ function AttendancePage({ token, classOptions }) {
           >
             {classOptions.map(({ classNumber, name }) => (
               <option value={classNumber} key={classNumber}>
-                Class {classNumber} · {name}
+                Class {classNumber} · {name.split(" (")[0]}
               </option>
             ))}
           </select>
@@ -1108,7 +1123,7 @@ function AttendancePage({ token, classOptions }) {
       {notice && <p className="notice success" role="status">{notice}</p>}
       {loading && <p className="notice info" role="status">Loading attendance…</p>}
 
-      {!loading && !dateError && !error && (
+      {!loading && !dateError && (!error || students.length > 0) && (
         <>
           <div className="attendance-counts" aria-label="Attendance totals">
             <SummaryCard label="Total students" value={students.length} />
@@ -1125,7 +1140,7 @@ function AttendancePage({ token, classOptions }) {
           <div className="attendance-actions">
             <button
               className="secondary"
-              disabled={loading || saving || !attendanceDate}
+              disabled={loading || saving || !attendanceDate || !hasUnsavedChanges}
               onClick={() => persistAttendance("draft")}
             >
               {saving ? "Saving…" : session?.status === "complete" ? "Save Corrections" : "Save Draft"}
@@ -1161,40 +1176,41 @@ function AttendancePage({ token, classOptions }) {
           )}
 
           {students.length > 0 && (
-            <div className="attendance-student-list">
-              {visibleStudents.map((student) => (
-                <article className="attendance-student" key={student.studentId}>
-                  <div className="attendance-student-identity">
-                    <strong>#{student.originalSerialNumber}</strong>
-                    <span>{student.studentName}</span>
-                    {student.christianName && (
-                      <span className="muted">{student.christianName}</span>
-                    )}
-                  </div>
-                  <label>
-                    Attendance status
-                    <select
-                      className={`attendance-status status-${statuses[student.studentId] || "not_recorded"}`}
-                      value={statuses[student.studentId] || "not_recorded"}
-                      disabled={loading || saving}
-                      onChange={(event) =>
-                        updateStatus(student.studentId, event.target.value)
-                      }
-                      aria-label={`Attendance for ${student.studentName}`}
-                    >
-                      <option
-                        value="not_recorded"
-                        disabled={session?.status === "complete"}
-                      >
-                        Not recorded
-                      </option>
-                      <option value="present">Present</option>
-                      <option value="absent">Absent</option>
-                      <option value="permission">Permission</option>
-                    </select>
-                  </label>
-                </article>
-              ))}
+            <div className="table-wrap attendance-table-wrap">
+              <table className="attendance-table">
+                <thead>
+                  <tr><th>Student number</th><th>Student name</th><th>Attendance status</th></tr>
+                </thead>
+                <tbody>
+                  {visibleStudents.map((student) => (
+                    <tr key={student.studentId}>
+                      <td data-label="Student number">#{student.originalSerialNumber}</td>
+                      <td data-label="Student name">{student.studentName}</td>
+                      <td data-label="Attendance status">
+                        <select
+                          className={`attendance-status status-${statuses[student.studentId] || "not_recorded"}`}
+                          value={statuses[student.studentId] || "not_recorded"}
+                          disabled={loading || saving}
+                          onChange={(event) =>
+                            updateStatus(student.studentId, event.target.value)
+                          }
+                          aria-label={`Attendance for ${student.studentName}`}
+                        >
+                          <option
+                            value="not_recorded"
+                            disabled={session?.status === "complete"}
+                          >
+                            Not recorded
+                          </option>
+                          <option value="present">Present</option>
+                          <option value="absent">Absent</option>
+                          <option value="permission">Permission</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
               {visibleStudents.length === 0 && (
                 <p className="notice info">No students match this search.</p>
               )}
@@ -1217,6 +1233,19 @@ function SummaryCard({ label, value, tone = "" }) {
 
 export default function App() {
   const [session, setSession] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    const handleExpiredSession = () => {
+      setSession(null);
+      setSessionExpired(true);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleExpiredSession);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpiredSession);
+  }, []);
+  function signIn(nextSession) {
+    setSession(nextSession);
+    setSessionExpired(false);
+  }
   if (
     ["teacher", "student"].includes(session?.role) &&
     session.mustChangePassword
@@ -1249,7 +1278,7 @@ export default function App() {
     />
   ) : (
     <div className="login-shell">
-      <Login onLogin={setSession} />
+      <Login onLogin={signIn} sessionExpired={sessionExpired} />
     </div>
   );
 }

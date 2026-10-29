@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ETHIOPIAN_MONTHS,
   ethiopianToGregorian,
@@ -9,11 +9,13 @@ import {
   createAdminAccount,
   validateAdminAccountForm,
 } from "./adminAccountCreation";
+import { apiFetch } from "./apiClient";
+import { reportRefreshInterval, scheduleReportRefresh } from "./reportRefresh";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 async function apiRequest(path, token, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await apiFetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
@@ -690,6 +692,7 @@ export function EligibilityPage({ token, role }) {
   const [sortBy, setSortBy] = useState("studentNumber");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const reportRefresh = useRef(null);
   const [termName, setTermName] = useState("");
   const [termStart, setTermStart] = useState(() => gregorianToEthiopian(localTodayAsGregorian()));
   const [termEnd, setTermEnd] = useState(() => gregorianToEthiopian(localTodayAsGregorian()));
@@ -708,13 +711,31 @@ export function EligibilityPage({ token, role }) {
       const params = new URLSearchParams({ classId, subjectId, academicYear: String(year) });
       if (periodType === "month" && month) params.set("academicMonth", month);
       if (periodType === "term" && termId) params.set("termId", termId);
-      setResult(await apiRequest(`/api/eligibility?${params}`, token));
+      const path = `/api/eligibility?${params}`;
+      const fetchReport = () => apiRequest(path, token);
+      reportRefresh.current = async () => {
+        try {
+          setResult(await fetchReport());
+          setError("");
+        } catch (requestError) {
+          setError(`Could not refresh the latest report: ${requestError.message}`);
+        }
+      };
+      setResult(await fetchReport());
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!result) return undefined;
+    return scheduleReportRefresh(
+      () => reportRefresh.current?.(),
+      { intervalMs: reportRefreshInterval() }
+    );
+  }, [token, Boolean(result)]);
 
   async function createTerm(event) {
     event.preventDefault();
@@ -1022,14 +1043,38 @@ export function StudentPortalPage({ token }) {
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
+    let requestInProgress = false;
+    let initialLoad = true;
     const params = new URLSearchParams({ academicYear: String(year) });
     if (month) params.set("academicMonth", month);
-    apiRequest(`/api/auth/portal/me?${params}`, token)
-      .then((payload) => { if (active) setDashboard(payload); })
-      .catch((requestError) => { if (active) setError(requestError.message); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    const refresh = async () => {
+      if (!active || requestInProgress) return;
+      requestInProgress = true;
+      if (initialLoad) setLoading(true);
+      try {
+        const payload = await apiRequest(`/api/auth/portal/me?${params}`, token);
+        if (active) {
+          setDashboard(payload);
+          setError("");
+        }
+      } catch (requestError) {
+        if (active) setError(requestError.message);
+      } finally {
+        requestInProgress = false;
+        if (active && initialLoad) {
+          initialLoad = false;
+          setLoading(false);
+        }
+      }
+    };
+    void refresh();
+    const stopPolling = scheduleReportRefresh(refresh, {
+      intervalMs: reportRefreshInterval(),
+    });
+    return () => {
+      active = false;
+      stopPolling();
+    };
   }, [token, year, month]);
 
   return (

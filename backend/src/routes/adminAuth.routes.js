@@ -57,7 +57,7 @@ router.post("/login", async (req, res, next) => {
       status: "ok",
       token,
       tokenType: "Bearer",
-      expiresInSeconds: 900,
+      expiresInSeconds: ADMIN_TOKEN_TTL_SECONDS,
     });
   } catch (error) {
     return next(error);

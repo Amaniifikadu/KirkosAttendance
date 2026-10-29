@@ -18,11 +18,13 @@ import {
   moveStatusCount,
   persistInlineStatusChange,
 } from "./parentMeetingAttendance";
+import { apiFetch } from "./apiClient";
+import { reportRefreshInterval, scheduleReportRefresh } from "./reportRefresh";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 async function apiRequest(path, token, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await apiFetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
@@ -310,6 +312,54 @@ export default function ParentMeetingAttendancePage({ token, role = "admin" }) {
   }, [token, academicYear, academicMonth, historyTarget]);
 
   useEffect(() => {
+    if (!token) return undefined;
+    return scheduleReportRefresh(async () => {
+      if (reportPeriod === "year" && annualReport) {
+        const annualParams = new URLSearchParams({
+          academicYear: String(academicYear),
+        });
+        if (annualClassNumber) {
+          annualParams.set("classNumber", annualClassNumber);
+        }
+        try {
+          const payload = await apiRequest(
+            `/api/parent-meetings/annual-report?${annualParams}`,
+            token
+          );
+          setAnnualReport(payload);
+        } catch (requestError) {
+          setError(`Could not refresh the latest report: ${requestError.message}`);
+        }
+        return;
+      }
+
+      const params = new URLSearchParams({
+        academicYear: String(academicYear),
+        academicMonth: String(academicMonth),
+      });
+      try {
+        const payload = await apiRequest(`/api/parent-meetings?${params}`, token);
+        setMeetings(payload.meetings);
+        setMeetingId((current) =>
+          payload.meetings.some(({ _id }) => _id === current)
+            ? current
+            : payload.meetings[0]?._id || ""
+        );
+        setReportRevision((revision) => revision + 1);
+      } catch (requestError) {
+        setError(`Could not refresh the latest report: ${requestError.message}`);
+      }
+    }, { intervalMs: reportRefreshInterval() });
+  }, [
+    token,
+    academicYear,
+    academicMonth,
+    reportPeriod,
+    annualClassNumber,
+    Boolean(annualReport),
+  ]);
+
+  useEffect(() => {
     if (!meetingId) {
       setReport(null);
       setFollowUps([]);
@@ -527,7 +577,7 @@ export default function ParentMeetingAttendancePage({ token, role = "admin" }) {
       const classQuery = exportClassNumber
         ? `?classNumber=${encodeURIComponent(exportClassNumber)}`
         : "";
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_BASE_URL}/api/parent-meetings/${meetingId}/export.xlsx${classQuery}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -559,7 +609,7 @@ export default function ParentMeetingAttendancePage({ token, role = "admin" }) {
       const classQuery = exportClassNumber
         ? `?classNumber=${encodeURIComponent(exportClassNumber)}`
         : "";
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_BASE_URL}/api/parent-meetings/${meetingId}/export.pdf${classQuery}`,
         { headers: { Authorization: "Bearer " + token } }
       );
@@ -617,7 +667,7 @@ export default function ParentMeetingAttendancePage({ token, role = "admin" }) {
       if (annualReport.classNumber) {
         params.set("classNumber", String(annualReport.classNumber));
       }
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_BASE_URL}/api/parent-meetings/annual-report/export.${format}?${params}`,
         { headers: { Authorization: "Bearer " + token } }
       );

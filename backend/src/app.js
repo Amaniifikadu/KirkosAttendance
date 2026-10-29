@@ -17,6 +17,10 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use("/api", (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 
 app.use("/api/health", healthRoutes);
 app.use("/api/auth/admin", adminAuthRoutes);

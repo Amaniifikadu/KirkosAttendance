@@ -61,6 +61,7 @@ test("admin login token remains valid beyond the former 15-minute expiry", async
     assert.equal(nextError, undefined);
     assert.equal(response.statusCode, 200);
     assert.equal(ADMIN_TOKEN_TTL_SECONDS, 30 * 60);
+    assert.equal(response.payload.expiresInSeconds, ADMIN_TOKEN_TTL_SECONDS);
     const payload = jwt.verify(response.payload.token, getJwtSecret(), {
       algorithms: ["HS256"],
       issuer: TOKEN_ISSUER,
