@@ -26,6 +26,7 @@ import {
   readApiResponse,
 } from "./apiClient";
 import { attendanceUpdates } from "./attendanceDraft";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 function Login({ onLogin, sessionExpired }) {
   const [flow, setFlow] = useState("signin");
