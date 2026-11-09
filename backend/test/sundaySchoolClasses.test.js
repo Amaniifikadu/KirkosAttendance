@@ -15,10 +15,12 @@ const expected = [
   ["ኢሳይያስ (8ኛ ክፍል)", "ኢሳይያስ"],
   ["ጴጥሮስ (9ኛ ክፍል)", "ጴጥሮስ"],
   ["ጳውሎስ (10ኛ ክፍል)", "ጳውሎስ"],
+  ["11ኛ ክፍል", "11ኛ ክፍል"],
+  ["12ኛ ክፍል", "12ኛ ክፍል"],
 ];
 
 test("provides exact display labels in numeric class order", () => {
-  assert.equal(SUNDAY_SCHOOL_CLASSES.length, 12);
+  assert.equal(SUNDAY_SCHOOL_CLASSES.length, 14);
   assert.deepEqual(
     SUNDAY_SCHOOL_CLASSES.map(({ classNumber, displayName }) => [
       classNumber,
@@ -28,7 +30,7 @@ test("provides exact display labels in numeric class order", () => {
   );
   assert.deepEqual(
     SUNDAY_SCHOOL_CLASSES.map(({ classNumber }) => classNumber),
-    Array.from({ length: 12 }, (_, index) => index + 1)
+    Array.from({ length: 14 }, (_, index) => index + 1)
   );
 });
 

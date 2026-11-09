@@ -180,8 +180,12 @@ test("validates canonical Gregorian dates, class numbers, and duplicate status e
     classNumber: 1,
     attendanceDate,
   });
+  assert.deepEqual(parseAttendanceSelection("14", attendanceDate), {
+    classNumber: 14,
+    attendanceDate,
+  });
   assert.throws(
-    () => parseAttendanceSelection("13", attendanceDate),
+    () => parseAttendanceSelection("15", attendanceDate),
     { statusCode: 400 }
   );
   assert.throws(

@@ -3,6 +3,7 @@ const Attendance = require("../models/Attendance");
 const AttendanceSession = require("../models/AttendanceSession");
 const Class = require("../models/Class");
 const Student = require("../models/Student");
+const SUNDAY_SCHOOL_CLASSES = require("../config/sundaySchoolClasses");
 const { numericStudentSortStages } = require("./studentList");
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -18,16 +19,20 @@ function parseAttendanceSelection(classNumberValue, attendanceDateValue) {
     typeof classNumberValue !== "string" &&
     typeof classNumberValue !== "number"
   ) {
-    throw createClientError("classNumber must be between 1 and 12.");
+    throw createClientError(
+      `classNumber must be between 1 and ${SUNDAY_SCHOOL_CLASSES.length}.`
+    );
   }
   const classNumber = Number(classNumberValue);
   if (
     !Number.isInteger(classNumber) ||
     classNumber < 1 ||
-    classNumber > 12 ||
+    classNumber > SUNDAY_SCHOOL_CLASSES.length ||
     String(classNumber) !== String(classNumberValue)
   ) {
-    throw createClientError("classNumber must be between 1 and 12.");
+    throw createClientError(
+      `classNumber must be between 1 and ${SUNDAY_SCHOOL_CLASSES.length}.`
+    );
   }
 
   if (

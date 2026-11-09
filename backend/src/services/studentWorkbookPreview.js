@@ -5,6 +5,7 @@ const MAX_ROWS_PER_SHEET = 5000;
 const MAX_TOTAL_ROWS = 10000;
 const HEADER_SCAN_ROWS = 25;
 const MAX_DETAIL_ROWS = 5000;
+const LEGACY_CLASS_COUNT = 12;
 
 const HEADER_ALIASES = Object.freeze({
   studentNumber: ["ተ.ቁ", "ተ•ቁ", "student number", "serial number", "number", "no"],
@@ -243,13 +244,44 @@ function parseStudentWorkbook(buffer, knownClasses, existingStudentsByClass) {
   const missingSheets = SUNDAY_SCHOOL_CLASSES.map(
     ({ sheetName }) => sheetName
   ).filter((name) => !normalizedSheets.includes(name));
+  const missingLegacySheets = SUNDAY_SCHOOL_CLASSES.slice(
+    0,
+    LEGACY_CLASS_COUNT
+  )
+    .map(({ sheetName }) => sheetName)
+    .filter((name) => !normalizedSheets.includes(name));
+  const newClassSheets = SUNDAY_SCHOOL_CLASSES.slice(LEGACY_CLASS_COUNT);
+  const missingNewClassSheets = newClassSheets
+    .map(({ sheetName }) => sheetName)
+    .filter((name) => !normalizedSheets.includes(name));
+  const partiallyPresentNewClasses =
+    missingNewClassSheets.length > 0 &&
+    missingNewClassSheets.length < newClassSheets.length;
+  const ambiguousSheets = SUNDAY_SCHOOL_CLASSES.flatMap(({ sheetName }) => {
+    const matches = workbook.SheetNames.filter(
+      (name) => name.trim().normalize("NFC") === sheetName
+    );
+    return matches.length > 1 && !matches.includes(sheetName)
+      ? [sheetName]
+      : [];
+  });
 
-  if (unexpectedSheets.length || missingSheets.length) {
+  if (
+    missingLegacySheets.length ||
+    partiallyPresentNewClasses ||
+    ambiguousSheets.length ||
+    unexpectedSheets.length > 1 ||
+    workbook.SheetNames.length > SUNDAY_SCHOOL_CLASSES.length + 1
+  ) {
     const error = new Error(
-      "Workbook must contain exactly the 12 configured Sunday School class sheets."
+      `Workbook must contain all ${SUNDAY_SCHOOL_CLASSES.length} configured Sunday School class sheets and may include one reserved worksheet.`
     );
     error.statusCode = 422;
-    error.details = { missingSheets, unexpectedSheets };
+    error.details = {
+      missingSheets,
+      unexpectedSheets,
+      ambiguousSheets,
+    };
     throw error;
   }
 
@@ -269,9 +301,14 @@ function parseStudentWorkbook(buffer, knownClasses, existingStudentsByClass) {
   let totalRows = 0;
 
   for (const { classNumber, sheetName } of SUNDAY_SCHOOL_CLASSES) {
-    const actualSheetName = workbook.SheetNames.find(
+    const matchingSheets = workbook.SheetNames.filter(
       (name) => name.trim().normalize("NFC") === sheetName
     );
+    const actualSheetName =
+      matchingSheets.find((name) => name === sheetName) || matchingSheets[0];
+    if (!actualSheetName) {
+      continue;
+    }
     const worksheet = workbook.Sheets[actualSheetName];
     const rows = XLSX.utils.sheet_to_json(worksheet, {
       header: 1,
@@ -440,7 +477,7 @@ function parseStudentWorkbook(buffer, knownClasses, existingStudentsByClass) {
     summary: {
       sheetCount: workbook.SheetNames.length,
       classRecordsFound: foundClassCount,
-      classRecordsMissing: SUNDAY_SCHOOL_CLASSES.length - foundClassCount,
+      classRecordsMissing: classRows.size - foundClassCount,
       totalRows,
       validRows: newRows.length,
       newRows: newRows.length,

@@ -335,7 +335,7 @@ test("annual service aggregates all meetings and student populations without per
       collection: { name: "students" },
       aggregate: async (pipeline) => {
         populationAggregations += 1;
-        assert.deepEqual(pipeline[0].$match.classNumber, { $gte: 1, $lte: 12 });
+        assert.deepEqual(pipeline[0].$match.classNumber, { $gte: 1, $lte: 14 });
         return [
           { _id: 1, totalStudents: 2 },
           { _id: 2, totalStudents: 1 },
@@ -369,6 +369,39 @@ test("annual service aggregates all meetings and student populations without per
   assert.equal(report.summary.absent, 1);
   assert.equal(report.summary.permission, 1);
   assert.equal(report.summary.notRecorded, 6);
+});
+
+test("annual parent-meeting validation accepts active class 14 and rejects class 15", async () => {
+  const service = await createParentMeetingService({
+    classModel: {
+      find: () => ({
+        sort() { return this; },
+        select() { return this; },
+        lean: async () => [],
+      }),
+    },
+    meetingModel: {
+      find: () => ({
+        sort() { return this; },
+        lean: async () => [],
+      }),
+    },
+    studentModel: {
+      collection: { name: "students" },
+      aggregate: async () => [],
+    },
+  });
+
+  const report = await service.getAnnualReport("2019", { classNumber: "14" });
+  assert.equal(report.classNumber, 14);
+  assert.equal(
+    report.selectedClassName,
+    SUNDAY_SCHOOL_CLASSES.getDisplayName(14)
+  );
+  await assert.rejects(
+    service.getAnnualReport("2019", { classNumber: "15" }),
+    { statusCode: 400 }
+  );
 });
 
 test("rejects duplicate student entries and unknown parent attendance statuses", () => {
@@ -649,14 +682,11 @@ test("attendance roster pagination bounds response size for large populations", 
     const result = await service.getClassReport(String(meetingId));
     assert.deepEqual(
       result.classes.map((item) => item.classNumber),
-      [...Array.from({ length: 12 }, (_, index) => index + 1), 14]
+      Array.from({ length: 14 }, (_, index) => index + 1)
     );
     assert.deepEqual(
       result.classes.map((item) => item.name),
-      [
-        ...SUNDAY_SCHOOL_CLASSES.map(({ displayName }) => displayName),
-        "Class Fourteen",
-      ]
+      SUNDAY_SCHOOL_CLASSES.map(({ displayName }) => displayName)
     );
     assert.deepEqual(
       result.classes.find((item) => item.classNumber === 1),
@@ -807,8 +837,8 @@ test("attendance roster pagination bounds response size for large populations", 
         ...classSummaries,
         {
           classId: "unconfigured-class",
-          classNumber: 14,
-          name: "Class Fourteen",
+          classNumber: 15,
+          name: "Class Fifteen",
           totalStudents: 1,
           present: 1,
           absent: 0,
@@ -819,11 +849,12 @@ test("attendance roster pagination bounds response size for large populations", 
       ],
     };
     const workbook = buildParentMeetingWorkbook(report, [], [], []);
-    assert.equal(workbook.SheetNames.length, 13);
+    assert.equal(workbook.SheetNames.length, 15);
     assert.deepEqual(workbook.SheetNames.slice(1), classSummaries.map(({ name }) => name));
-    assert.equal(workbook.SheetNames.includes("Class Fourteen"), false);
+    assert.equal(workbook.SheetNames.includes("Class Fifteen"), false);
     assert.equal(workbook.Sheets[classSummaries[0].name].A1.v, classSummaries[0].name);
     assert.equal(workbook.Sheets[classSummaries[11].name].A1.v, classSummaries[11].name);
+    assert.equal(workbook.Sheets[classSummaries[13].name].A1.v, classSummaries[13].name);
 
     const pdf = await createParentMeetingAllClassesPdf(report, [], []);
     assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");

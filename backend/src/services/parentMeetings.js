@@ -697,7 +697,12 @@ async function createParentMeetingService({
       const academicYear = normalizeAcademicPeriod(yearValue);
       const classNumber = query.classNumber === undefined || query.classNumber === ""
         ? undefined
-        : parsePositiveInteger(query.classNumber, "classNumber", undefined, 12);
+        : parsePositiveInteger(
+            query.classNumber,
+            "classNumber",
+            undefined,
+            SUNDAY_SCHOOL_CLASSES.length
+          );
       const allowedClassIds = Array.isArray(query.allowedClassIds)
         ? query.allowedClassIds
             .filter((id) => mongoose.isValidObjectId(id))
@@ -711,7 +716,9 @@ async function createParentMeetingService({
       const availableClassNumbers = Array.isArray(query.allowedClassIds)
         ? classRecords
             .map(({ classNumber: number }) => number)
-            .filter((number) => number >= 1 && number <= 12)
+            .filter((number) =>
+              SUNDAY_SCHOOL_CLASSES.some((item) => item.classNumber === number)
+            )
             .sort((left, right) => left - right)
         : SUNDAY_SCHOOL_CLASSES.map(({ classNumber: number }) => number);
       if (classNumber !== undefined && !availableClassNumbers.includes(classNumber)) {
@@ -720,7 +727,9 @@ async function createParentMeetingService({
 
       const studentFilter = {
         ...classIdScopeFilter(query.allowedClassIds),
-        classNumber: classNumber ?? { $gte: 1, $lte: 12 },
+        classNumber:
+          classNumber ??
+          { $gte: 1, $lte: SUNDAY_SCHOOL_CLASSES.length },
       };
       const [populationGroups, meetings] = await Promise.all([
         studentModel.aggregate([

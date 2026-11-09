@@ -6,18 +6,41 @@ const Student = require("../src/models/Student");
 const { parseStudentWorkbook } = require("../src/services/studentWorkbookPreview");
 const { insertNewStudents } = require("../src/routes/student.routes");
 
-function createWorkbook(classOneRows) {
+function createWorkbook(
+  classOneRows,
+  reservedRows,
+  classRows = {},
+  normalizeClassSheetNames = false,
+  reservedSheetName = "Reserved",
+  omittedClassNumbers = []
+) {
   const workbook = XLSX.utils.book_new();
 
-  for (const { sheetName } of SUNDAY_SCHOOL_CLASSES) {
+  for (const { classNumber, sheetName } of SUNDAY_SCHOOL_CLASSES) {
+    if (omittedClassNumbers.includes(classNumber)) {
+      continue;
+    }
     const rows =
       sheetName === SUNDAY_SCHOOL_CLASSES[0].sheetName
         ? [["Student Number", "Student Name"], ...classOneRows]
-        : [["Student Number", "Student Name"]];
+        : [
+            ["Student Number", "Student Name"],
+            ...(classRows[sheetName] || []),
+          ];
     XLSX.utils.book_append_sheet(
       workbook,
       XLSX.utils.aoa_to_sheet(rows),
-      sheetName
+      normalizeClassSheetNames
+        ? ` ${sheetName.normalize("NFD")} `
+        : sheetName
+    );
+  }
+
+  if (reservedRows) {
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet(reservedRows),
+      reservedSheetName
     );
   }
 
@@ -79,8 +102,8 @@ test("classifies rows and caches only unique, valid, new identities", () => {
   );
 
   assert.deepEqual(parsed.preview.summary, {
-    sheetCount: 12,
-    classRecordsFound: 12,
+    sheetCount: 14,
+    classRecordsFound: 14,
     classRecordsMissing: 0,
     totalRows: 7,
     validRows: 1,
@@ -111,6 +134,153 @@ test("classifies rows and caches only unique, valid, new identities", () => {
   assert.deepEqual(
     parsed.preview.duplicateRows.map(({ originalSerialNumber }) => originalSerialNumber),
     ["3", "3", "5"]
+  );
+});
+
+test("imports a legacy 12-class workbook without requiring the new class sheets", () => {
+  const parsed = parseStudentWorkbook(
+    createWorkbook(
+      [["1", "Legacy class student"]],
+      undefined,
+      {},
+      false,
+      "Reserved",
+      [13, 14]
+    ),
+    createKnownClasses(),
+    new Map()
+  );
+
+  assert.equal(parsed.preview.summary.sheetCount, 12);
+  assert.equal(parsed.preview.summary.totalRows, 1);
+  assert.equal(parsed.preview.summary.classRecordsFound, 12);
+  assert.equal(parsed.preview.classes.length, 12);
+  assert.deepEqual(
+    parsed.importRecords.map(({ classNumber, originalSerialNumber }) => [
+      classNumber,
+      originalSerialNumber,
+    ]),
+    [[1, "1"]]
+  );
+});
+
+test("rejects a workbook containing only one of the new class worksheets", () => {
+  assert.throws(
+    () =>
+      parseStudentWorkbook(
+        createWorkbook([], undefined, {}, false, "Reserved", [14]),
+        createKnownClasses(),
+        new Map()
+      ),
+    (error) =>
+      error.statusCode === 422 &&
+      error.details.missingSheets.includes(SUNDAY_SCHOOL_CLASSES[13].sheetName)
+  );
+});
+
+test("ignores an optional reserved worksheet and never imports its students", () => {
+  const parsed = parseStudentWorkbook(
+    createWorkbook([], [
+      ["Student Number", "Student Name"],
+      ["reserved-1", "Reserved student"],
+    ], {
+      [SUNDAY_SCHOOL_CLASSES[12].sheetName]: [
+        ["13-1", "Class Thirteen Student"],
+      ],
+      [SUNDAY_SCHOOL_CLASSES[13].sheetName]: [
+        ["14-1", "Class Fourteen Student"],
+      ],
+    }),
+    createKnownClasses(),
+    new Map()
+  );
+
+  assert.equal(parsed.preview.summary.sheetCount, 15);
+  assert.equal(parsed.preview.summary.totalRows, 2);
+  assert.equal(parsed.preview.classes.length, 14);
+  assert.deepEqual(
+    parsed.importRecords.map(({ classNumber, originalSerialNumber }) => [
+      classNumber,
+      originalSerialNumber,
+    ]),
+    [
+      [13, "13-1"],
+      [14, "14-1"],
+    ]
+  );
+  assert.deepEqual(
+    parsed.preview.newRows.map(({ className }) => className),
+    ["11ኛ ክፍል", "12ኛ ክፍል"]
+  );
+  assert.equal(
+    parsed.preview.newRows.some(
+      ({ studentName }) => studentName === "Reserved student"
+    ),
+    false
+  );
+});
+
+test("matches class worksheet names after trimming whitespace and NFC normalization", () => {
+  const parsed = parseStudentWorkbook(
+    createWorkbook([], undefined, {}, true),
+    createKnownClasses(),
+    new Map()
+  );
+
+  assert.equal(parsed.preview.summary.classRecordsFound, 14);
+  assert.equal(parsed.preview.summary.classRecordsMissing, 0);
+});
+
+test("prefers an exact class worksheet over an extra normalized-name collision", () => {
+  const classThirteenSheet = SUNDAY_SCHOOL_CLASSES[12].sheetName;
+  const parsed = parseStudentWorkbook(
+    createWorkbook(
+      [],
+      [
+        ["Student Number", "Student Name"],
+        ["reserved-13", "Reserved worksheet student"],
+      ],
+      {
+        [classThirteenSheet]: [["13-1", "Class 13 student"]],
+      },
+      false,
+      ` ${classThirteenSheet} `
+    ),
+    createKnownClasses(),
+    new Map()
+  );
+
+  assert.deepEqual(
+    parsed.importRecords.map(({ classNumber, originalSerialNumber }) => [
+      classNumber,
+      originalSerialNumber,
+    ]),
+    [[13, "13-1"]]
+  );
+  assert.equal(parsed.preview.newRows[0].className, "11ኛ ክፍል");
+});
+
+test("rejects ambiguous normalized class worksheet names without importing either", () => {
+  const classThirteenSheet = SUNDAY_SCHOOL_CLASSES[12].sheetName;
+  assert.throws(
+    () =>
+      parseStudentWorkbook(
+        createWorkbook(
+          [],
+          [
+            ["Student Number", "Student Name"],
+            ["reserved-13", "Reserved worksheet student"],
+          ],
+          {},
+          true,
+          `  ${classThirteenSheet.normalize("NFD")}  `
+        ),
+        createKnownClasses(),
+        new Map()
+      ),
+    (error) =>
+      error.statusCode === 422 &&
+      error.details.ambiguousSheets.includes(classThirteenSheet)
   );
 });
 

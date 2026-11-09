@@ -11,6 +11,8 @@ const SUNDAY_SCHOOL_CLASSES = [
   { classNumber: 10, displayName: "ኢሳይያስ (8ኛ ክፍል)", sheetName: "ኢሳይያስ" },
   { classNumber: 11, displayName: "ጴጥሮስ (9ኛ ክፍል)", sheetName: "ጴጥሮስ" },
   { classNumber: 12, displayName: "ጳውሎስ (10ኛ ክፍል)", sheetName: "ጳውሎስ" },
+  { classNumber: 13, displayName: "11ኛ ክፍል", sheetName: "11ኛ ክፍል" },
+  { classNumber: 14, displayName: "12ኛ ክፍል", sheetName: "12ኛ ክፍል" },
 ].map((item) => Object.freeze(item));
 
 function getDisplayName(classNumber, fallback = "") {
